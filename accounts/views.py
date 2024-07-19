@@ -166,8 +166,29 @@ class ActivateUserByAdminView(APIView):
             if request.user.role == 'superadmin' or (request.user.role == 'admin' and request.user.institution == user.institution):
                 user.is_active = True
                 user.save()
+                
+                # Send activation notification email
+                self.send_activation_notification(user)
+                
                 return Response({'message': 'User activated successfully'}, status=status.HTTP_200_OK)
             else:
                 return Response({'error': 'You do not have permission to activate this user'}, status=status.HTTP_403_FORBIDDEN)
         except User.DoesNotExist:
             return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    def send_activation_notification(self, user):
+        context = {
+            'user': user,
+            'login_url': 'http://localhost:3000/login'  # Update this with your frontend login URL
+        }
+        html_message = render_to_string('emails/account_activated_email_template.html', context)
+        plain_message = strip_tags(html_message)
+
+        send_mail(
+            'Your GymWise account has been activated',
+            plain_message,
+            'contact@gymwise.tech',
+            [user.email],
+            html_message=html_message,
+            fail_silently=False,
+        )
