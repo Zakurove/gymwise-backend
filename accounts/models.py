@@ -7,7 +7,15 @@ import json
 
 class Institution(models.Model):
     name = models.CharField(max_length=100, unique=True)
-    allowed_domains = models.TextField(default='[]')  # Store as JSON string
+    subdomain = models.CharField(max_length=100, unique=True)
+    domain = models.CharField(max_length=253, unique=True, null=True, blank=True)
+    allowed_domains = models.TextField(default='[]')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.name
 
     def get_allowed_domains(self):
         return json.loads(self.allowed_domains)
@@ -18,8 +26,11 @@ class Institution(models.Model):
     def is_domain_allowed(self, domain):
         return domain in self.get_allowed_domains()
 
-    def __str__(self):
-        return self.name
+class TenantAwareModel(models.Model):
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='%(app_label)s_%(class)s_related')
+
+    class Meta:
+        abstract = True
 
 class UserManager(BaseUserManager):
     def create_user(self, email, first_name, last_name, password=None, **extra_fields):
@@ -36,12 +47,10 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('is_active', True)
         extra_fields.setdefault('role', 'superadmin')
-
         if extra_fields.get('is_staff') is not True:
             raise ValueError('Superuser must have is_staff=True.')
         if extra_fields.get('is_superuser') is not True:
             raise ValueError('Superuser must have is_superuser=True.')
-
         return self.create_user(email, first_name, last_name, password, **extra_fields)
 
 class User(AbstractUser):
@@ -74,6 +83,20 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.email
+
+class Member(TenantAwareModel):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='account_member')
+    institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='account_members')
+    # Add other member-specific fields here
+
+class AIModel(TenantAwareModel):
+    name = models.CharField(max_length=100)
+    file_path = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.name} - {self.institution.name}"
 
 @receiver(post_delete, sender=User)
 def delete_log_entries(sender, instance, **kwargs):

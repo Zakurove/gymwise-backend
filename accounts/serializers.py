@@ -9,6 +9,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.template.loader import render_to_string
 from django.utils.html import strip_tags
 from .models import User, Institution
+import json
 
 class RegisterSerializer(serializers.ModelSerializer):
     class Meta:
@@ -48,6 +49,13 @@ class RegisterSerializer(serializers.ModelSerializer):
         )
         user.is_active = False
         user.is_email_verified = False
+        
+        # Set the user's institution based on their email domain
+        domain = user.email.split('@')[1]
+        institution = Institution.objects.filter(allowed_domains__contains=domain).first()
+        if institution:
+            user.institution = institution
+        
         user.save()
 
         self.send_activation_email(user)
@@ -58,7 +66,7 @@ class RegisterSerializer(serializers.ModelSerializer):
         current_site = get_current_site(self.context['request'])
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         token = default_token_generator.make_token(user)
-        activation_link = f"http://localhost:3000/activate/{uid}/{token}/"
+        activation_link = f"http://{current_site.domain}/activate/{uid}/{token}/"
 
         context = {
             'user': user,
@@ -70,11 +78,12 @@ class RegisterSerializer(serializers.ModelSerializer):
         send_mail(
             'Activate your GymWise account',
             plain_message,
-            'contact@gymwise.tech',
+            'noreply@gymwise.com',
             [user.email],
             html_message=html_message,
             fail_silently=False,
         )
+
 class ActivateUserSerializer(serializers.Serializer):
     uid = serializers.CharField()
     token = serializers.CharField()
@@ -103,14 +112,28 @@ class ManageRolesSerializer(serializers.Serializer):
     role = serializers.ChoiceField(choices=User.ROLE_CHOICES)
 
 class InstitutionSerializer(serializers.ModelSerializer):
+    allowed_domains = serializers.ListField(child=serializers.CharField(), write_only=True)
+
     class Meta:
         model = Institution
-        fields = ['id', 'name', 'allowed_domains']
+        fields = ['id', 'name', 'schema_name', 'subdomain', 'domain', 'allowed_domains', 'is_active']
+
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        representation['allowed_domains'] = json.loads(instance.allowed_domains)
+        return representation
+
+    def to_internal_value(self, data):
+        if 'allowed_domains' in data:
+            data['allowed_domains'] = json.dumps(data['allowed_domains'])
+        return super().to_internal_value(data)
 
 class UserSerializer(serializers.ModelSerializer):
+    institution_name = serializers.CharField(source='institution.name', read_only=True)
+
     class Meta:
         model = User
-        fields = ['id', 'email', 'first_name', 'last_name', 'role', 'institution', 'is_active', 'is_email_verified']
+        fields = ['id', 'email', 'first_name', 'last_name', 'role', 'institution', 'institution_name', 'is_active', 'is_email_verified']
 
 class InactiveUserSerializer(serializers.ModelSerializer):
     class Meta:
