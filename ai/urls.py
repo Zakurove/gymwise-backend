@@ -15,4 +15,10 @@ urlpatterns = [
     path('retention-forecast/', views.get_retention_forecast, name='retention_forecast'),
     path('seasonal-insights/', views.get_seasonal_insights, name='seasonal_insights'),
     path('train-and-evaluate/', views.train_and_evaluate_model, name='train_and_evaluate'),
+    path('campaign-suggestions/', views.CampaignSuggestionsView.as_view(), name='campaign_suggestions'),
+    path('create-campaign/', views.CreateCampaignView.as_view(), name='create_campaign'),
+    path('campaign-performance/', views.CampaignPerformanceView.as_view(), name='campaign_performance'),
+    path('active-campaigns/', views.get_active_campaigns, name='active_campaigns'),
+    path('campaign-insights/', views.get_campaign_insights, name='campaign_insights'),
+    path('what-if-scenario/', views.WhatIfScenarioView.as_view(), name='what_if_scenario'),
 ]

@@ -66,7 +66,7 @@ class RegisterSerializer(serializers.ModelSerializer):
         current_site = get_current_site(self.context['request'])
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         token = default_token_generator.make_token(user)
-        activation_link = f"http://{current_site.domain}/activate/{uid}/{token}/"
+        activation_link = activation_link = f"http://localhost:3000/activate/{uid}/{token}/"
 
         context = {
             'user': user,
@@ -78,7 +78,7 @@ class RegisterSerializer(serializers.ModelSerializer):
         send_mail(
             'Activate your GymWise account',
             plain_message,
-            'noreply@gymwise.com',
+            'contact@gymwise.tech',
             [user.email],
             html_message=html_message,
             fail_silently=False,

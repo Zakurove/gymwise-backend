@@ -100,3 +100,31 @@ class InstitutionModel(TenantAwareModel):
 
     def set_performance_metrics(self, metrics):
         self.performance_metrics = json.dumps(metrics)
+
+
+
+class Campaign(TenantAwareModel):
+    name = models.CharField(max_length=255)
+    target_segment = models.CharField(max_length=50)
+    campaign_type = models.CharField(max_length=50)
+    message = models.TextField()
+    start_date = models.DateField()
+    end_date = models.DateField()
+    ai_optimization = models.BooleanField(default=False)
+    status = models.CharField(max_length=20, default='Active')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.name} - {self.institution.name}"
+
+class CampaignPerformance(TenantAwareModel):
+    campaign = models.ForeignKey(Campaign, on_delete=models.CASCADE, related_name='performances')
+    date = models.DateField()
+    total_sent = models.IntegerField()
+    open_rate = models.FloatField()
+    click_through_rate = models.FloatField()
+    conversion_rate = models.FloatField()
+
+    def __str__(self):
+        return f"Performance for {self.campaign.name} on {self.date}"

@@ -13,3 +13,20 @@ def engineer_features(df):
     df = df.drop(['Contract_length'], axis=1)
     
     return df
+
+def engineer_scenario_features(df, scenario_params):
+    df = engineer_features(df)
+    
+    # Add scenario-specific feature engineering
+    if 'new_classes' in scenario_params:
+        df['class_variety_score'] = df['class_variety_score'] * (1 + scenario_params['new_classes'] / df['available_classes'])
+    
+    if 'facility_improvement' in scenario_params:
+        df['facility_score'] = df['facility_score'] * (1 + scenario_params['facility_improvement'])
+    
+    if 'staff_training' in scenario_params:
+        df['staff_satisfaction_score'] = df['staff_satisfaction_score'] * (1 + scenario_params['staff_training'])
+    
+    # Add more scenario-specific feature engineering as needed
+    
+    return df

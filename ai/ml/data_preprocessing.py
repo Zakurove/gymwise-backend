@@ -1,7 +1,5 @@
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
 from django.conf import settings
 import os
 
@@ -17,14 +15,41 @@ def load_and_preprocess_data(file_name):
     
     return df
 
-def split_and_scale_data(df, target_column='Churn'):
-    X = df.drop(target_column, axis=1)
-    y = df[target_column]
+def preprocess_data(df):
+    # Handle missing values
+    df = df.fillna(0)
     
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    # Convert categorical variables to numeric
+    df['gender'] = df['gender'].map({'male': 0, 'female': 1})
+    df['time_of_day'] = df['time_of_day'].map({'morning': 0, 'afternoon': 1, 'evening': 2})
     
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
+    # Create new features
+    df['days_since_last_visit'] = (pd.Timestamp.now() - pd.to_datetime(df['date'])).dt.days
+    df['visit_frequency'] = df.groupby('id')['date'].transform('count')
     
-    return X_train_scaled, X_test_scaled, y_train, y_test, scaler
+    # Add seasonal features
+    df['month'] = pd.to_datetime(df['date']).dt.month
+    df['is_ramadan'] = df['month'].isin([9, 10])  # Assuming Ramadan is typically in the 9th and 10th months
+    df['is_summer'] = df['month'].isin([6, 7, 8])
+    
+    return df
+
+def preprocess_scenario_data(df, scenario_params):
+    df = preprocess_data(df)
+    
+    # Apply scenario parameters
+    if 'membership_price_change' in scenario_params:
+        df['membership_price'] *= (1 + scenario_params['membership_price_change'])
+    
+    if 'new_classes' in scenario_params:
+        df['available_classes'] += scenario_params['new_classes']
+    
+    if 'gym_hours_change' in scenario_params:
+        df['gym_hours'] += scenario_params['gym_hours_change']
+    
+    if 'marketing_intensity' in scenario_params:
+        df['marketing_score'] = df['marketing_score'] * scenario_params['marketing_intensity']
+    
+    # Add more scenario parameter applications as needed
+    
+    return df

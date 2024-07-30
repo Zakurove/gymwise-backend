@@ -9,8 +9,9 @@ from .views import (
     InstitutionView,
     CustomTokenObtainPairView,
     UserView,
-    PendingUsersView,
     ActivateUserByAdminView,
+    CurrentUserView,
+    InstitutionUsersView,
 )
 
 urlpatterns = [
@@ -21,7 +22,8 @@ urlpatterns = [
     path('forgot-password/', ForgotPasswordView.as_view(), name='forgot_password'),
     path('reset-password/<str:uid>/<str:token>/', ResetPasswordView.as_view(), name='reset_password'),
     path('manage-roles/', ManageRolesView.as_view(), name='manage_roles'),
-    path('user/', UserView.as_view(), name='user'),
-    path('pending-users/', PendingUsersView.as_view(), name='pending_users'),
+    path('user/', CurrentUserView.as_view(), name='current_user'),
+    path('institution-users/', InstitutionUsersView.as_view(), name='institution_users'),
     path('activate-user/<int:user_id>/', ActivateUserByAdminView.as_view(), name='activate_user'),
 ]
+

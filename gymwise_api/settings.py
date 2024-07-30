@@ -59,7 +59,7 @@ WSGI_APPLICATION = 'gymwise_api.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'dbGymwise222', 
+        'NAME': 'dbGymwise333', 
         'USER': 'postgres',
         'PASSWORD': 'naserww13',
         'HOST': '127.0.0.1', 

@@ -16,6 +16,9 @@ import joblib
 import os
 from django.conf import settings
 import logging
+from .models import Campaign, CampaignPerformance
+from rest_framework import status
+from django.db.models import Sum, Avg
 
 logger = logging.getLogger(__name__)
 
@@ -300,3 +303,250 @@ def train_and_evaluate_model(request):
     except Exception as e:
         logger.error(f"Error in train_and_evaluate_model: {str(e)}", exc_info=True)
         return JsonResponse({'error': str(e)}, status=500)
+    
+
+
+
+
+class CampaignSuggestionsView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        try:
+            institution_id = request.user.institution.id
+            
+            # Load member data
+            members = Member.objects.filter(institution_id=institution_id).values()
+            df = pd.DataFrame.from_records(members)
+            
+            # Preprocess data
+            df = data_preprocessing.preprocess_data(df)
+            df = feature_engineering.engineer_features(df)
+            
+            # Get model
+            model = model_training.get_model_for_institution(institution_id)
+            
+            if model is None:
+                return Response({"error": "Model not found for this institution"}, status=status.HTTP_404_NOT_FOUND)
+            
+            # Predict churn probabilities
+            X = df.drop(['id', 'name', 'email', 'churn_probability'], axis=1, errors='ignore')
+            churn_probabilities = model.predict_proba(X)[:, 1]
+            
+            # Segment members based on churn risk
+            df['churn_risk'] = pd.cut(churn_probabilities, bins=[0, 0.3, 0.7, 1], labels=['Low', 'Medium', 'High'])
+            
+            # Generate campaign suggestions
+            suggestions = self.generate_campaign_suggestions(df)
+            
+            return Response(suggestions, status=status.HTTP_200_OK)
+        
+        except Exception as e:
+            logger.error(f"Error in CampaignSuggestionsView: {str(e)}")
+            return Response({"error": "An error occurred while generating campaign suggestions"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    def generate_campaign_suggestions(self, df):
+        suggestions = []
+        
+        # High-risk members campaign
+        high_risk_count = df[df['churn_risk'] == 'High'].shape[0]
+        if high_risk_count > 0:
+            suggestions.append({
+                "target_segment": "High Churn Risk",
+                "member_count": high_risk_count,
+                "campaign_type": "Personalized Retention",
+                "message_template": "We've missed you at the gym! Here's a special offer to get you back on track: {offer}",
+                "recommended_actions": ["Offer a free personal training session", "Provide a discount on membership renewal"]
+            })
+        
+        # Low-engagement members campaign
+        low_engagement_count = df[df['visit_frequency'] < df['visit_frequency'].median()].shape[0]
+        if low_engagement_count > 0:
+            suggestions.append({
+                "target_segment": "Low Engagement",
+                "member_count": low_engagement_count,
+                "campaign_type": "Re-engagement",
+                "message_template": "Boost your fitness journey with our new {class_type} class! Join us this week and feel the difference.",
+                "recommended_actions": ["Introduce new class types", "Send workout tips and motivation"]
+            })
+        
+        # Expiring membership campaign
+        expiring_soon_count = df[df['days_to_membership_expiry'] <= 30].shape[0]
+        if expiring_soon_count > 0:
+            suggestions.append({
+                "target_segment": "Expiring Memberships",
+                "member_count": expiring_soon_count,
+                "campaign_type": "Renewal",
+                "message_template": "Your membership is expiring soon. Renew now and get {discount}% off your next month!",
+                "recommended_actions": ["Offer renewal incentives", "Highlight new gym features or classes"]
+            })
+        
+        return suggestions
+
+class CreateCampaignView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        try:
+            campaign_data = request.data
+            campaign_data['institution'] = request.user.institution
+            
+            campaign = Campaign.objects.create(**campaign_data)
+            
+            return Response({"message": "Campaign created successfully", "id": campaign.id}, status=status.HTTP_201_CREATED)
+        
+        except Exception as e:
+            logger.error(f"Error in CreateCampaignView: {str(e)}")
+            return Response({"error": "An error occurred while creating the campaign"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class CampaignPerformanceView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        try:
+            institution_id = request.user.institution.id
+            campaigns = Campaign.objects.filter(institution_id=institution_id)
+            
+            performance_data = []
+            for campaign in campaigns:
+                performance = CampaignPerformance.objects.filter(campaign=campaign).aggregate(
+                    avg_open_rate=Avg('open_rate'),
+                    avg_click_rate=Avg('click_through_rate'),
+                    avg_conversion_rate=Avg('conversion_rate')
+                )
+                
+                performance_data.append({
+                    "id": campaign.id,
+                    "name": campaign.name,
+                    "target_segment": campaign.target_segment,
+                    "campaign_type": campaign.campaign_type,
+                    "start_date": campaign.start_date,
+                    "end_date": campaign.end_date,
+                    "status": campaign.status,
+                    "avg_open_rate": performance['avg_open_rate'],
+                    "avg_click_rate": performance['avg_click_rate'],
+                    "avg_conversion_rate": performance['avg_conversion_rate']
+                })
+            
+            return Response(performance_data, status=status.HTTP_200_OK)
+        
+        except Exception as e:
+            logger.error(f"Error in CampaignPerformanceView: {str(e)}")
+            return Response({"error": "An error occurred while fetching campaign performance"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser])
+def get_active_campaigns(request):
+    try:
+        campaigns = Campaign.objects.filter(institution=request.user.institution, status='Active')
+        data = [{
+            'id': campaign.id,
+            'name': campaign.name,
+            'targetSegment': campaign.target_segment,
+            'campaignType': campaign.campaign_type,
+            'status': campaign.status,
+            'startDate': campaign.start_date,
+            'endDate': campaign.end_date,
+        } for campaign in campaigns]
+        return Response(data)
+    except Exception as e:
+        logger.error(f"Error in get_active_campaigns: {str(e)}", exc_info=True)
+        return Response({'error': 'An error occurred while fetching active campaigns'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser])
+def get_campaign_insights(request):
+    try:
+        total_campaigns = Campaign.objects.filter(institution=request.user.institution).count()
+        active_campaigns = Campaign.objects.filter(institution=request.user.institution, status='Active').count()
+        
+        total_sent = CampaignPerformance.objects.filter(campaign__institution=request.user.institution).aggregate(Sum('total_sent'))['total_sent__sum'] or 0
+        avg_open_rate = CampaignPerformance.objects.filter(campaign__institution=request.user.institution).aggregate(Avg('open_rate'))['open_rate__avg'] or 0
+        avg_ctr = CampaignPerformance.objects.filter(campaign__institution=request.user.institution).aggregate(Avg('click_through_rate'))['click_through_rate__avg'] or 0
+        avg_conversion_rate = CampaignPerformance.objects.filter(campaign__institution=request.user.institution).aggregate(Avg('conversion_rate'))['conversion_rate__avg'] or 0
+
+        insights = [
+            {'label': 'Total Campaigns', 'value': str(total_campaigns), 'change': 0},
+            {'label': 'Active Campaigns', 'value': str(active_campaigns), 'change': 0},
+            {'label': 'Total Sent', 'value': str(total_sent), 'change': 0},
+            {'label': 'Avg. Open Rate', 'value': f"{avg_open_rate:.2f}%", 'change': 0},
+            {'label': 'Avg. Click-through Rate', 'value': f"{avg_ctr:.2f}%", 'change': 0},
+            {'label': 'Avg. Conversion Rate', 'value': f"{avg_conversion_rate:.2f}%", 'change': 0},
+        ]
+        return Response(insights)
+    except Exception as e:
+        logger.error(f"Error in get_campaign_insights: {str(e)}", exc_info=True)
+        return Response({'error': 'An error occurred while fetching campaign insights'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+
+class WhatIfScenarioView(APIView):
+    def post(self, request):
+        try:
+            institution_id = request.user.institution.id
+            scenario_params = request.data.get('scenario_params', {})
+
+            # Input validation
+            if not self.validate_scenario_params(scenario_params):
+                return Response({"error": "Invalid scenario parameters"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Check cache for existing scenario results
+            cache_key = f"scenario_{institution_id}_{hash(frozenset(scenario_params.items()))}"
+            cached_result = cache.get(cache_key)
+            if cached_result:
+                return Response(cached_result, status=status.HTTP_200_OK)
+
+            # Load current member data
+            members = Member.objects.filter(institution_id=institution_id).values()
+            df = pd.DataFrame.from_records(members)
+
+            # Preprocess and engineer features for the scenario
+            df = data_preprocessing.preprocess_scenario_data(df, scenario_params)
+            df = feature_engineering.engineer_scenario_features(df, scenario_params)
+
+            # Get the model for this institution
+            model = model_training.get_model_for_institution(institution_id)
+
+            if model is None:
+                return Response({"error": "Model not found for this institution"}, status=status.HTTP_404_NOT_FOUND)
+
+            # Make predictions
+            X_scenario = df.drop(['id', 'name', 'email', 'churn_probability'], axis=1, errors='ignore')
+            scenario_probabilities = model_training.predict_scenario(model, X_scenario)
+
+            if scenario_probabilities is None:
+                return Response({"error": "Error in scenario prediction"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # Calculate retention rate
+            current_retention_rate = 1 - df['churn_probability'].mean()
+            scenario_retention_rate = 1 - scenario_probabilities.mean()
+
+            response_data = {
+                "current_retention_rate": current_retention_rate,
+                "scenario_retention_rate": scenario_retention_rate,
+                "retention_rate_change": scenario_retention_rate - current_retention_rate,
+            }
+
+            # Cache the result
+            cache.set(cache_key, response_data, timeout=3600)  # Cache for 1 hour
+
+            return Response(response_data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f"Error in WhatIfScenarioView: {str(e)}")
+            return Response({"error": "An error occurred while processing the scenario"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def validate_scenario_params(self, params):
+        valid_params = {
+            'membership_price_change': (-0.5, 0.5),
+            'new_classes': (0, 10),
+            'gym_hours_change': (-4, 4),
+            'marketing_intensity': (0.5, 2),
+            'facility_improvement': (0, 0.5),
+            'staff_training': (0, 0.5)
+        }
+
+        for param, (min_val, max_val) in valid_params.items():
+            if param in params:
+                if not isinstance(params[param], (int, float)) or params[param] < min_val or params[param] > max_val:
+                    return False
+        return True
