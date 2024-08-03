@@ -7,8 +7,6 @@ import json
 
 class Institution(models.Model):
     name = models.CharField(max_length=100, unique=True)
-    subdomain = models.CharField(max_length=100, unique=True)
-    domain = models.CharField(max_length=253, unique=True, null=True, blank=True)
     allowed_domains = models.TextField(default='[]')
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)

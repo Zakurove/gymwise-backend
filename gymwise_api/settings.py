@@ -22,7 +22,6 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    'accounts.middleware.TenantMiddleware',  # Our custom tenant middleware
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',
@@ -59,7 +58,7 @@ WSGI_APPLICATION = 'gymwise_api.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'dbGymwise333', 
+        'NAME': 'dbGymwise44', 
         'USER': 'postgres',
         'PASSWORD': 'naserww13',
         'HOST': '127.0.0.1', 
@@ -97,6 +96,7 @@ SIMPLE_JWT = {
 }
 
 CORS_ALLOW_ALL_ORIGINS = True  # In production, replace with specific origins
+CORS_ALLOW_CREDENTIALS = True
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'live.smtp.mailtrap.io'

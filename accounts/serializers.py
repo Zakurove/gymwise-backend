@@ -50,7 +50,6 @@ class RegisterSerializer(serializers.ModelSerializer):
         user.is_active = False
         user.is_email_verified = False
         
-        # Set the user's institution based on their email domain
         domain = user.email.split('@')[1]
         institution = Institution.objects.filter(allowed_domains__contains=domain).first()
         if institution:
@@ -66,7 +65,7 @@ class RegisterSerializer(serializers.ModelSerializer):
         current_site = get_current_site(self.context['request'])
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         token = default_token_generator.make_token(user)
-        activation_link = activation_link = f"http://localhost:3000/activate/{uid}/{token}/"
+        activation_link = f"http://localhost:3000/activate/{uid}/{token}/"
 
         context = {
             'user': user,
@@ -116,7 +115,7 @@ class InstitutionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Institution
-        fields = ['id', 'name', 'schema_name', 'subdomain', 'domain', 'allowed_domains', 'is_active']
+        fields = ['id', 'name', 'allowed_domains', 'is_active']
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)

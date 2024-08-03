@@ -25,5 +25,6 @@ urlpatterns = [
     path('user/', CurrentUserView.as_view(), name='current_user'),
     path('institution-users/', InstitutionUsersView.as_view(), name='institution_users'),
     path('activate-user/<int:user_id>/', ActivateUserByAdminView.as_view(), name='activate_user'),
+    # path('tenant/<str:subdomain>/', get_tenant_by_subdomain, name='get_tenant_by_subdomain'),
 ]
 

@@ -1,6 +1,8 @@
 from rest_framework import generics, status, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -13,7 +15,7 @@ from django.conf import settings
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from django.utils.http import urlsafe_base64_encode
-from django.utils.encoding import force_bytes, force_str
+from django.utils.encoding import force_bytes
 from django.utils.html import strip_tags
 from .models import Institution
 from .serializers import (
@@ -26,7 +28,6 @@ from .serializers import (
     UserSerializer
 )
 from .permissions import IsAdminUser, IsSuperAdminOrAdmin, IsSuperAdmin
-from rest_framework.permissions import IsAuthenticated
 import logging
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,22 @@ User = get_user_model()
 class RegisterView(generics.CreateAPIView):
     queryset = User.objects.all()
     serializer_class = RegisterSerializer
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [AllowAny]  # This is crucial
+
+    def create(self, request, *args, **kwargs):
+        logger.info(f"Received registration request: {request.data}")
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid():
+            try:
+                self.perform_create(serializer)
+                headers = self.get_success_headers(serializer.data)
+                logger.info(f"User registered successfully: {serializer.data}")
+                return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+            except Exception as e:
+                logger.error(f"Error during user registration: {str(e)}")
+                return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        logger.error(f"Invalid registration data: {serializer.errors}")
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def perform_create(self, serializer):
         user = serializer.save()
@@ -47,7 +63,7 @@ class RegisterView(generics.CreateAPIView):
             user.save()
 
 class ActivateUserView(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [AllowAny]
 
     def get(self, request, uidb64, token):
         try:
@@ -66,10 +82,12 @@ class ActivateUserView(APIView):
 class CustomTokenObtainPairView(TokenObtainPairView):
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
-        if response.status_code == status.HTTP_200_OK:
+        if response.status_code == 200:
             user = User.objects.get(email=request.data['email'])
-            response.data['user'] = UserSerializer(user).data
+            user_data = UserSerializer(user).data
+            response.data['user'] = user_data
         return response
+
 class ForgotPasswordView(APIView):
     permission_classes = [permissions.AllowAny]
 
@@ -100,9 +118,8 @@ class ForgotPasswordView(APIView):
             except User.DoesNotExist:
                 return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 class ResetPasswordView(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [AllowAny]
 
     def post(self, request, uid, token):
         try:
@@ -120,10 +137,10 @@ class ResetPasswordView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         else:
             return Response({'error': 'Reset link is invalid!'}, status=status.HTTP_400_BAD_REQUEST)
-        
+
 class InstitutionUsersView(generics.ListAPIView):
     serializer_class = UserSerializer
-    permission_classes = [permissions.IsAuthenticated, IsAdminUser]
+    permission_classes = [IsAuthenticated, IsAdminUser]
 
     def get_queryset(self):
         logger.info(f"User {self.request.user.id} fetching institution users")
@@ -134,7 +151,7 @@ class InstitutionUsersView(generics.ListAPIView):
         return User.objects.none()
 
 class ManageRolesView(generics.GenericAPIView):
-    permission_classes = [permissions.IsAuthenticated, IsAdminUser]
+    permission_classes = [IsAuthenticated, IsAdminUser]
     queryset = User.objects.all()
     serializer_class = UserSerializer
 
@@ -148,7 +165,6 @@ class ManageRolesView(generics.GenericAPIView):
         try:
             user_to_update = User.objects.get(id=user_id)
             
-            # Check permissions
             if request.user.role != 'superadmin' and (user_to_update.role == 'superadmin' or new_role == 'superadmin'):
                 return Response({'error': 'You do not have permission to change superadmin roles'}, status=status.HTTP_403_FORBIDDEN)
 
@@ -166,7 +182,6 @@ class ManageRolesView(generics.GenericAPIView):
         except Exception as e:
             logger.error(f"Error in ManageRolesView: {str(e)}")
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
 
 class InstitutionView(generics.ListCreateAPIView):
     queryset = Institution.objects.all()
@@ -174,7 +189,7 @@ class InstitutionView(generics.ListCreateAPIView):
     permission_classes = [IsSuperAdmin]
 
 class UserView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
         serializer = UserSerializer(request.user)
@@ -183,13 +198,6 @@ class UserView(APIView):
 class PendingUsersView(generics.ListAPIView):
     serializer_class = UserSerializer
     permission_classes = [IsAdminUser]
-
-    def get_queryset(self):
-        if self.request.user.role == 'superadmin':
-            return User.objects.filter(is_active=False, is_email_verified=True)
-        elif self.request.user.role == 'admin':
-            return User.objects.filter(is_active=False, is_email_verified=True, institution=self.request.user.institution)
-        return User.objects.none()
 
     def get_queryset(self):
         logger.info(f"User {self.request.user.id} attempting to fetch pending users")
@@ -202,18 +210,8 @@ class PendingUsersView(generics.ListAPIView):
         logger.warning(f"User {self.request.user.id} does not have permission to view pending users")
         return User.objects.none()
 
-    def list(self, request, *args, **kwargs):
-        try:
-            queryset = self.get_queryset()
-            serializer = self.get_serializer(queryset, many=True)
-            logger.info(f"Successfully fetched {len(serializer.data)} pending users")
-            return Response(serializer.data)
-        except Exception as e:
-            logger.error(f"Error in PendingUsersView: {str(e)}")
-            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 class ActivateUserByAdminView(generics.UpdateAPIView):
-    permission_classes = [permissions.IsAuthenticated, IsAdminUser]
+    permission_classes = [IsAuthenticated, IsAdminUser]
     queryset = User.objects.all()
     lookup_url_kwarg = 'user_id'
 
@@ -235,12 +233,9 @@ class ActivateUserByAdminView(generics.UpdateAPIView):
     def post(self, request, *args, **kwargs):
         return self.update(request, *args, **kwargs)
 
-# Add this new view to get the current user's information
 class CurrentUserView(generics.RetrieveAPIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAuthenticated]
     serializer_class = UserSerializer
 
     def get_object(self):
         return self.request.user
-
-

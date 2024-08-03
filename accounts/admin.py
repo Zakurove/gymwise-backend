@@ -24,9 +24,9 @@ class UserAdmin(BaseUserAdmin):
     filter_horizontal = ('groups', 'user_permissions',)
 
 class InstitutionAdmin(admin.ModelAdmin):
-    list_display = ('name', 'subdomain', 'domain', 'is_active', 'created_at')
+    list_display = ('name', 'is_active', 'created_at')
     list_filter = ('is_active',)
-    search_fields = ('name', 'subdomain', 'domain')
+    search_fields = ('name',)
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
