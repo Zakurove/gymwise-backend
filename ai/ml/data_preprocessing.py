@@ -9,47 +9,50 @@ def load_and_preprocess_data(file_name):
         raise FileNotFoundError(f"The file {file_name} does not exist in the data directory.")
     
     df = pd.read_csv(file_path)
-    
-    binary_cols = ['gender', 'Near_Location', 'Partner', 'Promo_friends', 'Phone', 'Group_visits', 'Churn']
-    df[binary_cols] = df[binary_cols].astype(bool)
-    
-    return df
+    return preprocess_data(df)
 
 def preprocess_data(df):
+    # Create a copy of the dataframe to avoid modifying the original
+    processed_df = df.copy()
+    
     # Handle missing values
-    df = df.fillna(0)
+    processed_df = processed_df.fillna(0)
     
-    # Convert categorical variables to numeric
-    df['gender'] = df['gender'].map({'male': 0, 'female': 1})
-    df['time_of_day'] = df['time_of_day'].map({'morning': 0, 'afternoon': 1, 'evening': 2})
+    # Convert categorical variables to numeric if they exist
+    categorical_mappings = {
+        'gender': {'male': 0, 'female': 1},
+        'time_of_day': {'morning': 0, 'afternoon': 1, 'evening': 2},
+    }
     
-    # Create new features
-    df['days_since_last_visit'] = (pd.Timestamp.now() - pd.to_datetime(df['date'])).dt.days
-    df['visit_frequency'] = df.groupby('id')['date'].transform('count')
+    for col, mapping in categorical_mappings.items():
+        if col in processed_df.columns:
+            processed_df[col] = processed_df[col].map(mapping).fillna(0).astype(int)
     
-    # Add seasonal features
-    df['month'] = pd.to_datetime(df['date']).dt.month
-    df['is_ramadan'] = df['month'].isin([9, 10])  # Assuming Ramadan is typically in the 9th and 10th months
-    df['is_summer'] = df['month'].isin([6, 7, 8])
+    # Handle date-related features
+    date_column = next((col for col in processed_df.columns if 'date' in col.lower()), None)
+    if date_column:
+        processed_df[date_column] = pd.to_datetime(processed_df[date_column], errors='coerce')
+        processed_df['days_since_last_visit'] = (pd.Timestamp.now() - processed_df[date_column]).dt.days
+        processed_df['month'] = processed_df[date_column].dt.month
+        processed_df['is_ramadan'] = processed_df['month'].isin([9, 10])
+        processed_df['is_summer'] = processed_df['month'].isin([6, 7, 8])
     
-    return df
-
-def preprocess_scenario_data(df, scenario_params):
-    df = preprocess_data(df)
+    # Handle numeric columns
+    numeric_columns = processed_df.select_dtypes(include=[np.number]).columns
+    for col in numeric_columns:
+        processed_df[col] = pd.to_numeric(processed_df[col], errors='coerce').fillna(0)
     
-    # Apply scenario parameters
-    if 'membership_price_change' in scenario_params:
-        df['membership_price'] *= (1 + scenario_params['membership_price_change'])
+    # Create visit frequency if possible
+    if 'id' in processed_df.columns and date_column:
+        processed_df['visit_frequency'] = processed_df.groupby('id')[date_column].transform('count')
     
-    if 'new_classes' in scenario_params:
-        df['available_classes'] += scenario_params['new_classes']
+    # Ensure core fields exist, create them if they don't
+    core_fields = ['email', 'name', 'churn_risk', 'churn_probability']
+    for field in core_fields:
+        if field not in processed_df.columns:
+            if field in ['churn_risk', 'churn_probability']:
+                processed_df[field] = 0  # Default values
+            else:
+                processed_df[field] = ''  # Empty string for non-numeric fields
     
-    if 'gym_hours_change' in scenario_params:
-        df['gym_hours'] += scenario_params['gym_hours_change']
-    
-    if 'marketing_intensity' in scenario_params:
-        df['marketing_score'] = df['marketing_score'] * scenario_params['marketing_intensity']
-    
-    # Add more scenario parameter applications as needed
-    
-    return df
+    return processed_df

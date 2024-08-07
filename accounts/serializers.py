@@ -11,6 +11,7 @@ from django.utils.html import strip_tags
 from .models import User, Institution
 import json
 
+
 class RegisterSerializer(serializers.ModelSerializer):
     class Meta:
         model = User

@@ -12,20 +12,35 @@ class Member(TenantAwareModel):
         ('high', 'High Risk'),
     ]
 
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='ai_member')
     institution = models.ForeignKey(Institution, on_delete=models.CASCADE, related_name='ai_members')
-    email = models.EmailField(unique=True)
+    email = models.EmailField()
     name = models.CharField(max_length=255)
-    churn_risk = models.CharField(max_length=10, choices=CHURN_RISK_CHOICES)
-    churn_probability = models.FloatField()
+    churn_risk = models.CharField(max_length=10, choices=CHURN_RISK_CHOICES, default='low')
+    churn_probability = models.FloatField(default=0.0)
     last_prediction_date = models.DateTimeField(auto_now=True)
     gender = models.CharField(max_length=10, null=True, blank=True)
     age = models.IntegerField(null=True, blank=True)
     membership_duration = models.IntegerField(null=True, blank=True)
     visit_frequency = models.FloatField(null=True, blank=True)
+    join_date = models.DateField(null=True, blank=True)
+    extended_data = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        unique_together = ['email', 'institution']
 
     def __str__(self):
         return f"{self.name} - {self.institution.name} - {self.churn_risk} Risk"
+
+class MappingTemplate(TenantAwareModel):
+    name = models.CharField(max_length=100)
+    mapping = models.JSONField()
+    is_default = models.BooleanField(default=False)
+
+    class Meta:
+        unique_together = ('name', 'institution')
+
+    def __str__(self):
+        return f"{self.name} - {self.institution.name}"
 
 class MemberActivity(TenantAwareModel):
     TIME_CHOICES = [
@@ -49,7 +64,7 @@ class ActionableInsight(TenantAwareModel):
 
     def __str__(self):
         return f"{self.type} insight for {self.member.name}"
-
+    
 class ModelMetrics(TenantAwareModel):
     date = models.DateTimeField(auto_now_add=True)
     accuracy = models.FloatField()

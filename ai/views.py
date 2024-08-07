@@ -3,13 +3,14 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
-from django.db import connection
+from django.db import connection, transaction
 from .ml import data_preprocessing, feature_engineering, model_training, model_evaluation, customer_segmentation
-from .models import Member, ActionableInsight, ModelMetrics, FeatureImportance, MemberSegment, MemberSegmentAssignment, MemberActivity, InstitutionModel
+from .models import Member, ActionableInsight, ModelMetrics, FeatureImportance, MemberSegment, MemberSegmentAssignment, MemberActivity, InstitutionModel, MappingTemplate
 from .insights import generate_insights
 from .data_pipeline import get_preprocessed_data_for_institution
 from django.db.models import Count
 from datetime import datetime, timedelta
+from accounts.permissions import IsSuperAdminOrAdmin
 import pandas as pd
 import numpy as np
 import joblib
@@ -19,101 +20,108 @@ import logging
 from .models import Campaign, CampaignPerformance
 from rest_framework import status
 from django.db.models import Sum, Avg
+import json
+from django.utils import timezone
+from django.shortcuts import get_object_or_404
+from django.core.paginator import Paginator, EmptyPage
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler
 
 logger = logging.getLogger(__name__)
 
-class UploadMemberDataView(APIView):
-    permission_classes = [IsAdminUser]
-
-    def post(self, request, format=None):
-        try:
-            institution = request.user.institution
-            if not institution:
-                return Response({'error': 'User is not associated with an institution'}, status=400)
-
-            file = request.FILES.get('file')
-            if not file:
-                return Response({'error': 'No file uploaded'}, status=400)
-            
-            df = pd.read_csv(file)
-            df = data_preprocessing.preprocess_data(df)
-            df = feature_engineering.engineer_features(df)
-            
-            X = df.drop(['Churn', 'name', 'email'], axis=1)
-            y = df['Churn']
-            
-            # Train or fine-tune model for the specific institution
-            model = model_training.train_models(X, y, institution.id)
-            
-            # Make predictions
-            probabilities = model.predict_proba(X)[:, 1]
-            
-            df['churn_probability'] = probabilities
-            df['churn_risk'] = pd.cut(df['churn_probability'], 
-                                      bins=[0, 0.3, 0.7, 1], 
-                                      labels=['low', 'medium', 'high'])
-            
-            # Update or create Member objects
-            for _, row in df.iterrows():
-                member, created = Member.objects.update_or_create(
-                    email=row['email'],
-                    institution=institution,
-                    defaults={
-                        'name': row['name'],
-                        'churn_risk': row['churn_risk'],
-                        'churn_probability': row['churn_probability'],
-                        # Add other fields as necessary
-                    }
-                )
-                
-                # Generate insights
-                historical_data = MemberActivity.objects.filter(member=member)
-                insights = generate_insights(member, historical_data)
-                for insight in insights:
-                    ActionableInsight.objects.create(
-                        member=member, 
-                        type=insight['type'],
-                        message=insight['message'],
-                        institution=institution
-                    )
-            
-            return Response({'message': 'Data processed successfully'})
         
-        except Exception as e:
-            logger.error(f"Error in UploadMemberDataView: {str(e)}", exc_info=True)
-            return Response({'error': str(e)}, status=500)
-
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_member_insights(request):
     try:
-        member = Member.objects.get(user=request.user, institution=request.user.institution)
-        historical_data = MemberActivity.objects.filter(member=member)
-        insights = generate_insights(member, historical_data)
-        actionable_insights = ActionableInsight.objects.filter(member=member, institution=request.user.institution).order_by('-created_at')
+        page = int(request.query_params.get('page', 1))
+        sort_by = request.query_params.get('sort_by', 'name')
+        sort_order = request.query_params.get('sort_order', 'asc')
+        search = request.query_params.get('search', '')
+
+        members_query = Member.objects.filter(institution=request.user.institution)
         
+        if search:
+            members_query = members_query.filter(
+                Q(name__icontains=search) | Q(email__icontains=search)
+            )
+        
+        sort_field = f"{'-' if sort_order == 'desc' else ''}{sort_by}"
+        members = members_query.order_by(sort_field)
+
+        members_data = []
+        for member in members:
+            historical_data = MemberActivity.objects.filter(member=member)
+            insights = generate_insights(member, historical_data)
+            actionable_insights = ActionableInsight.objects.filter(
+                member=member, 
+                institution=request.user.institution
+            ).order_by('-created_at')
+            
+            member_data = {
+                'member_info': {
+                    'id': member.id,
+                    'name': member.name,
+                    'email': member.email,
+                    'churn_risk': member.churn_risk,
+                    'churn_probability': member.churn_probability,
+                },
+                'insights': insights,
+                'actionable_insights': [
+                    {
+                        'type': insight.type,
+                        'message': insight.message,
+                        'created_at': insight.created_at.isoformat()
+                    } for insight in actionable_insights
+                ]
+            }
+            members_data.append(member_data)
+
+        paginator = Paginator(members_data, 10)
+        try:
+            page_data = paginator.page(page)
+        except EmptyPage:
+            page_data = paginator.page(paginator.num_pages)
+
         response_data = {
-            'member_info': {
-                'name': member.name,
-                'churn_risk': member.churn_risk,
-                'churn_probability': member.churn_probability,
-            },
-            'insights': insights,
-            'actionable_insights': [
-                {
-                    'type': insight.type,
-                    'message': insight.message,
-                    'created_at': insight.created_at
-                } for insight in actionable_insights
-            ]
+            'results': page_data.object_list,
+            'count': paginator.count,
+            'page': page,
+            'total_pages': paginator.num_pages
         }
         
         return Response(response_data)
-    except Member.DoesNotExist:
-        return Response({'error': 'Member not found'}, status=404)
     except Exception as e:
         logger.error(f"Error in get_member_insights: {str(e)}", exc_info=True)
         return Response({'error': 'An error occurred while fetching member insights'}, status=500)
+
+def get_member_detail(request, member_id):
+    member = get_object_or_404(Member, id=member_id)
+    historical_data = MemberActivity.objects.filter(member=member)
+    insights = generate_insights(member, historical_data)
+    
+    member_data = {
+        'id': member.id,
+        'name': member.name,
+        'email': member.email,
+        'churn_risk': member.churn_risk,
+        'churn_probability': member.churn_probability,
+        'visit_frequency': member.visit_frequency,
+        'membership_duration': member.membership_duration,
+        'join_date': member.join_date.isoformat() if member.join_date else None,
+    }
+    
+    return JsonResponse({
+        'member_info': member_data,
+        'insights': insights,
+        'actionable_insights': [
+            {
+                'type': insight.type,
+                'message': insight.message,
+                'created_at': insight.created_at.isoformat()
+            } for insight in ActionableInsight.objects.filter(member=member).order_by('-created_at')
+        ]
+    })
 
 
 @api_view(['GET'])
@@ -550,3 +558,269 @@ class WhatIfScenarioView(APIView):
                 if not isinstance(params[param], (int, float)) or params[param] < min_val or params[param] > max_val:
                     return False
         return True
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_data_status(request):
+    institution = request.user.institution
+    total_records = Member.objects.filter(institution=institution).count()
+    processed_records = total_records  # Assume all records in Member are processed
+    
+    latest_metrics = ModelMetrics.objects.filter(institution=institution).order_by('-date').first()
+    data_quality = latest_metrics.accuracy * 100 if latest_metrics else 0
+    
+    last_update = Member.objects.filter(institution=institution).order_by('-last_prediction_date').first()
+    last_update_time = last_update.last_prediction_date if last_update else None
+
+    return Response({
+        'lastUpdate': last_update_time,
+        'totalRecords': total_records,
+        'processedRecords': processed_records,
+        'dataQuality': data_quality
+    })
+
+class AnalyzeCSVView(APIView):
+    permission_classes = [IsAuthenticated, IsSuperAdminOrAdmin]
+
+    def post(self, request):
+        file = request.FILES.get('file')
+        if not file:
+            return Response({'error': 'No file uploaded'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            df = pd.read_csv(file)
+            columns = df.columns.tolist()
+            return Response({'columns': columns})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+class SaveMappingTemplateView(APIView):
+    permission_classes = [IsAuthenticated, IsSuperAdminOrAdmin]
+
+    def post(self, request):
+        name = request.data.get('name')
+        mapping = request.data.get('mapping')
+        is_default = request.data.get('is_default', False)
+        
+        if not name or not mapping:
+            return Response({'error': 'Name and mapping are required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            template, created = MappingTemplate.objects.update_or_create(
+                name=name,
+                institution=request.user.institution,
+                defaults={
+                    'mapping': mapping,
+                    'is_default': is_default
+                }
+            )
+            return Response({
+                'id': template.id,
+                'name': template.name,
+                'is_default': template.is_default
+            }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+class GetMappingTemplatesView(APIView):
+    permission_classes = [IsAuthenticated, IsSuperAdminOrAdmin]
+
+    def get(self, request):
+        templates = MappingTemplate.objects.filter(institution=request.user.institution)
+        data = [{
+            'id': t.id,
+            'name': t.name,
+            'is_default': t.is_default,
+            'mapping': t.mapping
+        } for t in templates]
+        return Response(data)
+
+
+class ProcessMappedDataView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        file = request.FILES.get('file')
+        mapping = request.data.get('mapping')
+        
+        if not file or not mapping:
+            return Response({'error': 'File and mapping are required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            df = pd.read_csv(file)
+            
+            # Convert mapping from JSON string to dictionary if necessary
+            if isinstance(mapping, str):
+                mapping = json.loads(mapping)
+            
+            # Create a reverse mapping
+            reverse_mapping = {v: k for k, v in mapping.items()}
+            
+            # Rename columns based on the mapping
+            df_mapped = df.rename(columns=reverse_mapping)
+            
+            # Preprocess data
+            df_processed = data_preprocessing.preprocess_data(df_mapped)
+            df_processed = feature_engineering.engineer_features(df_processed)
+            
+            # Get the model and its features for this institution
+            model, model_features = model_training.get_model_for_institution(request.user.institution.id)
+            
+            if model is None:
+                logger.error("Failed to load the model.")
+                return Response({'error': 'Failed to process data due to model loading error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            # Prepare data for prediction
+            if model_features is not None:
+                # Use only the features that are present in both model_features and df_processed
+                common_features = list(set(model_features) & set(df_processed.columns))
+                X = df_processed[common_features]
+                logger.info(f"Using common features for prediction: {common_features}")
+            else:
+                # If model_features is None, use all numeric columns
+                X = df_processed.select_dtypes(include=[np.number])
+                logger.info(f"Using all numeric features for prediction: {X.columns.tolist()}")
+            
+            # Handle feature mismatch
+            if X.shape[1] != model.n_features_in_:
+                logger.warning(f"Feature mismatch. Model expects {model.n_features_in_} features, but got {X.shape[1]}. Adapting...")
+                
+                if X.shape[1] > model.n_features_in_:
+                    # If we have more features than the model expects, select the first n_features_in_
+                    X = X.iloc[:, :model.n_features_in_]
+                else:
+                    # If we have fewer features, add dummy columns
+                    for i in range(X.shape[1], model.n_features_in_):
+                        X[f'dummy_{i}'] = 0
+                
+                logger.info(f"Adapted features for prediction: {X.columns.tolist()}")
+            
+            # Ensure all columns are numeric
+            X = X.apply(pd.to_numeric, errors='coerce')
+            
+            # Handle missing values
+            imputer = SimpleImputer(strategy='mean')
+            X = pd.DataFrame(imputer.fit_transform(X), columns=X.columns)
+            
+            # Scale features
+            scaler = StandardScaler()
+            X = pd.DataFrame(scaler.fit_transform(X), columns=X.columns)
+            
+            # Make predictions
+            probabilities = model.predict_proba(X)[:, 1]
+            
+            df_processed['churn_probability'] = probabilities
+            df_processed['churn_risk'] = pd.cut(df_processed['churn_probability'], 
+                                                bins=[0, 0.3, 0.7, 1], 
+                                                labels=['low', 'medium', 'high'])
+
+            
+            with transaction.atomic():
+                for _, row in df_processed.iterrows():
+                    core_data = {
+                        'email': row.get('email', f"user_{_}@example.com"),  # Use a default if email is missing
+                        'name': row.get('name', f"User {_}"),  # Use a default if name is missing
+                        'churn_risk': row['churn_risk'],
+                        'churn_probability': float(row['churn_probability']),
+                        'gender': row.get('gender'),
+                        'age': float(row['Age']) if pd.notnull(row.get('Age')) else None,
+                        'membership_duration': float(row['Lifetime']) if pd.notnull(row.get('Lifetime')) else None,
+                        'visit_frequency': float(row['Avg_class_frequency_total']) if pd.notnull(row.get('Avg_class_frequency_total')) else None,
+                    }
+                    
+                    # Handle extended data, replacing NaN with None
+                    extended_data = {}
+                    for col, value in row.items():
+                        if col not in core_data:
+                            if pd.isna(value):
+                                extended_data[col] = None
+                            elif isinstance(value, (int, float)):
+                                extended_data[col] = float(value)
+                            else:
+                                extended_data[col] = str(value)
+
+                    member, created = Member.objects.update_or_create(
+                        email=core_data['email'],
+                        institution=request.user.institution,
+                        defaults={
+                            **core_data,
+                            'extended_data': extended_data,
+                            'last_prediction_date': timezone.now()
+                        }
+                    )
+                    
+                    # Create MemberActivity record
+                    MemberActivity.objects.create(
+                        member=member,
+                        institution=request.user.institution,
+                        date=row.get('date', timezone.now().date()),
+                        class_name=row.get('class_name', 'General'),
+                        time_of_day=row.get('time_of_day', 'morning')
+                    )
+                    
+                    # Generate insights
+                    historical_data = MemberActivity.objects.filter(member=member)
+                    insights = generate_insights(member, historical_data)
+                    for insight in insights:
+                        ActionableInsight.objects.create(
+                            member=member, 
+                            type=insight['type'],
+                            message=insight['message'],
+                            institution=request.user.institution
+                        )
+                    
+                    logger.info(f"{'Created' if created else 'Updated'} member {member.id} with churn risk {member.churn_risk}")
+            
+            return Response({'message': 'Data processed and stored successfully'})
+        except Exception as e:
+            logger.error(f"Error in ProcessMappedDataView: {str(e)}", exc_info=True)
+            return Response({'error': f"An error occurred: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class TrainInstitutionModelView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+    def post(self, request):
+        file = request.FILES.get('file')
+        mapping = request.data.get('mapping')
+        
+        if not file or not mapping:
+            return Response({'error': 'Training data file and mapping are required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            df = pd.read_csv(file)
+            
+            # Apply mapping
+            if isinstance(mapping, str):
+                mapping = json.loads(mapping)
+            reverse_mapping = {v: k for k, v in mapping.items()}
+            df_mapped = df.rename(columns=reverse_mapping)
+            
+            # Preprocess data
+            df_processed = data_preprocessing.preprocess_data(df_mapped)
+            df_processed = feature_engineering.engineer_features(df_processed)
+            
+            # Prepare data for model
+            X = df_processed.drop(['Churn', 'name', 'email'], axis=1, errors='ignore')
+            y = df_processed['Churn']
+            
+            # Train model for the specific institution
+            model, feature_names = model_training.train_institution_model(X, y, request.user.institution.id)
+            
+            if model is None:
+                return Response({'error': 'Failed to train the model'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            # Save the mapping template
+            MappingTemplate.objects.update_or_create(
+                name=f"Institution_{request.user.institution.id}_Template",
+                institution=request.user.institution,
+                defaults={'mapping': mapping}
+            )
+            
+            return Response({
+                'message': 'Institution model trained successfully',
+                'features_used': feature_names
+            }, status=status.HTTP_200_OK)
+        
+        except Exception as e:
+            logger.error(f"Error in TrainInstitutionModelView: {str(e)}", exc_info=True)
+            return Response({'error': f"An error occurred: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
